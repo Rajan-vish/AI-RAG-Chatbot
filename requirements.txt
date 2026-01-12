@@ -39,3 +39,6 @@ pytest==8.3.4
 
 # Optional - needed for using download_models.py
 einops
+
+# Hybrid Search - BM25 keyword retrieval
+rank-bm25==0.2.2

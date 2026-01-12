@@ -40,13 +40,15 @@ async function sendMessage() {
         }
 
         const data = await response.json();
+        console.log('Response data:', data);
+        console.log('Search stats:', data.search_stats);
 
         if (data.error) {
             throw new Error(data.error);
         }
 
-        // Add assistant response to chat
-        addMessage('assistant', data.answer, data.citations, data.retrieved_chunks);
+        // Add assistant response to chat with search stats
+        addMessage('assistant', data.answer, data.citations, data.retrieved_chunks, data.search_stats);
 
         // Update conversation history
         conversationHistory.push({
@@ -66,7 +68,7 @@ async function sendMessage() {
 }
 
 // Add message to chat UI
-function addMessage(role, content, citations = [], chunks = []) {
+function addMessage(role, content, citations = [], chunks = [], searchStats = null) {
     const messagesDiv = document.getElementById('chatMessages');
 
     // Remove initial prompt if exists
@@ -95,9 +97,28 @@ function addMessage(role, content, citations = [], chunks = []) {
         citationsHtml += '</div>';
     }
 
+    // Build search stats HTML for assistant messages
+    let searchStatsHtml = '';
+    if (role === 'assistant' && searchStats) {
+        let statsText = '';
+        if (searchStats.mode === 'hybrid') {
+            statsText = `Hybrid: ${searchStats.semantic_count} semantic + ${searchStats.keyword_count} keyword → ${searchStats.after_dedup || '?'} unique`;
+        } else if (searchStats.mode === 'keyword') {
+            statsText = `Keyword: ${searchStats.keyword_count} results → ${searchStats.after_dedup || '?'} unique`;
+        } else {
+            statsText = `Semantic: ${searchStats.semantic_count} results → ${searchStats.after_dedup || '?'} unique`;
+        }
+        searchStatsHtml = `
+            <div class="search-stats">
+                <i class="fas fa-search"></i> ${statsText}
+            </div>
+        `;
+    }
+
     messageDiv.innerHTML = `
         <div class="message-bubble">
             <div class="message-content">${escapeHtml(content)}</div>
+            ${role === 'assistant' ? searchStatsHtml : ''}
             ${role === 'assistant' ? citationsHtml : ''}
         </div>
         <div class="message-timestamp">${AppUtils.formatTimestamp()}</div>
@@ -167,9 +188,57 @@ document.addEventListener('DOMContentLoaded', () => {
     // Focus on input
     document.getElementById('messageInput').focus();
 
+    // Load retrieval mode and update badge
+    loadRetrievalMode();
+
     // Add welcome message
     const messagesDiv = document.getElementById('chatMessages');
     if (!messagesDiv.querySelector('.chat-message')) {
         // Keep initial prompt
     }
 });
+
+// Fetch and display retrieval mode
+async function loadRetrievalMode() {
+    console.log('Loading retrieval mode config...');
+    try {
+        const response = await fetch('/api/config');
+        console.log('Config response status:', response.status);
+        if (response.ok) {
+            const config = await response.json();
+            console.log('Config loaded:', config);
+            updateModeBadge(config.retrieval_mode);
+        } else {
+            console.error('Config response not OK:', response.status);
+            updateModeBadge('error');
+        }
+    } catch (error) {
+        console.error('Failed to load config:', error);
+        updateModeBadge('unknown');
+    }
+}
+
+// Update mode badge in header
+function updateModeBadge(mode) {
+    const badge = document.getElementById('retrievalModeBadge');
+    if (!badge) return;
+
+    const icons = {
+        'hybrid': '🔀',
+        'keyword': '🔤',
+        'semantic': '🧠'
+    };
+    const labels = {
+        'hybrid': 'Hybrid',
+        'keyword': 'Keyword',
+        'semantic': 'Semantic'
+    };
+    const colors = {
+        'hybrid': 'bg-success',
+        'keyword': 'bg-warning text-dark',
+        'semantic': 'bg-info'
+    };
+
+    badge.innerHTML = `${icons[mode] || '❓'} ${labels[mode] || mode}`;
+    badge.className = `badge ${colors[mode] || 'bg-secondary'}`;
+}

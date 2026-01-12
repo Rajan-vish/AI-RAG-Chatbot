@@ -6,10 +6,12 @@ import logging
 import tempfile
 from typing import List, Optional
 from datetime import datetime
-from fastapi import FastAPI, UploadFile, File, HTTPException, Query
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, UploadFile, File, HTTPException, Query, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
+from fastapi.responses import FileResponse
 
 from backend.ingest import get_ingestor
 from backend.query import get_query_service
@@ -49,76 +51,58 @@ try:
 except Exception as e:
     logger.warning(f"Error during temp directory cleanup: {e}")
 
-# Initialize FastAPI app
-app = FastAPI(
-    title="Local RAG Chatbot API",
-    description="PDF ingestion and query API with local embeddings and Gemini LLM",
-    version="1.0.0",
-    lifespan=lifespan
-)
-
-# Add CORS middleware for web UI
-# Use environment variable for allowed origins, default to common development origins
-ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:5000,http://127.0.0.1:5000,http://192.168.1.36:5000").split(",")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Global service instances (initialized on startup)
+ingestor = None
+query_service = None
+chroma_client = None
 
 
-# Pydantic models
+# ============================================================================
+# Pydantic Models
+# ============================================================================
+
 class IngestResponse(BaseModel):
     """Response model for document ingestion."""
     doc_id: str = Field(..., description="Unique document ID")
-    status: str = Field(..., description="Ingestion status: 'ingested' or 'partial'")
+    status: str = Field(..., description="Ingestion status: 'ingested', 'partial', or 'failed'")
     chunks: int = Field(..., description="Number of chunks created")
     failed_pages: List[int] = Field(default_factory=list, description="List of failed page numbers")
 
 
-class Citation(BaseModel):
-    """Citation model with source information."""
-    source_filename: Optional[str] = Field(None, description="Source PDF filename")
-    page_number: Optional[int] = Field(None, description="Page number in PDF")
-    chunk_index: Optional[int] = Field(None, description="Chunk index")
-
-
-class RetrievedChunk(BaseModel):
-    """Retrieved chunk with metadata."""
-    id: str = Field(..., description="Chunk ID")
-    document: str = Field(..., description="Chunk text content")
-    metadata: dict = Field(..., description="Chunk metadata")
-    distance: Optional[float] = Field(None, description="Distance from query")
-
-
-class QueryResponse(BaseModel):
-    """Response model for query endpoint."""
-    answer: str = Field(..., description="LLM-generated answer")
-    citations: List[Citation] = Field(..., description="Source citations")
-    retrieved_chunks: List[RetrievedChunk] = Field(..., description="Retrieved context chunks")
-
-
-class QueryRequest(BaseModel):
-    """Request model for POST /ask endpoint."""
-    query: str = Field(..., description="User question", min_length=1)
-
-
 class DocumentInfo(BaseModel):
     """Document metadata model."""
-    doc_id: str = Field(..., description="Document ID")
+    doc_id: str = Field(..., description="Unique document ID")
     source_filename: str = Field(..., description="Original filename")
     pages: int = Field(..., description="Number of pages")
     chunks: int = Field(..., description="Number of chunks")
     ingested_at: str = Field(..., description="Ingestion timestamp")
 
 
-# Global service instances (initialized on startup)
-ingestor = None
-query_service = None
-chroma_client = None
+class QueryRequest(BaseModel):
+    """Request model for query endpoint."""
+    query: str = Field(..., min_length=1, description="User question")
+
+
+class Citation(BaseModel):
+    """Citation model for query response."""
+    source_filename: Optional[str] = None
+    page_number: Optional[int] = None
+    chunk_index: Optional[int] = None
+
+
+class RetrievedChunk(BaseModel):
+    """Retrieved chunk model for query response."""
+    id: str
+    document: str
+    metadata: dict
+    distance: float
+
+
+class QueryResponse(BaseModel):
+    """Response model for query endpoint."""
+    answer: str = Field(..., description="Generated answer")
+    citations: List[Citation] = Field(default_factory=list, description="Source citations")
+    retrieved_chunks: List[RetrievedChunk] = Field(default_factory=list, description="Retrieved context chunks")
 
 
 @asynccontextmanager
@@ -160,6 +144,15 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down application...")
 
 
+# Initialize FastAPI app
+app = FastAPI(
+    title="Local RAG Chatbot API",
+    description="PDF ingestion and query API with local embeddings and Gemini LLM",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+
 @app.get("/")
 async def root():
     """Root endpoint with API info."""
@@ -172,8 +165,24 @@ async def root():
             "GET /documents/{doc_id}": "Get document metadata",
             "DELETE /documents/{doc_id}": "Delete document and its chunks",
             "GET /ask": "Query with GET (query parameter)",
-            "POST /ask": "Query with POST (JSON body)"
+            "POST /ask": "Query with POST (JSON body)",
+            "GET /config": "Get current configuration"
         }
+    }
+
+
+@app.get("/config")
+async def get_config():
+    """
+    Get current configuration for frontend display.
+    
+    Returns retrieval mode, k value, and embedding provider.
+    """
+    return {
+        "retrieval_mode": os.getenv("RETRIEVAL_MODE", "hybrid"),
+        "retrieval_k": int(os.getenv("RETRIEVAL_K", "5")),
+        "embedding_provider": os.getenv("EMBEDDING_PROVIDER", "auto"),
+        "llm_temperature": float(os.getenv("LLM_TEMPERATURE", "0.3"))
     }
 
 

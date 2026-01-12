@@ -15,6 +15,10 @@ from backend.chroma_client import get_chroma_client
 
 logger = logging.getLogger(__name__)
 
+# Minimum characters required to consider a PDF page as having extractable text.
+# Pages with fewer characters are treated as image-only (OCR not supported).
+MIN_TEXT_LENGTH = 10
+
 
 class MarkdownConverter:
     """Simple rules-based PDF text to Markdown converter."""
@@ -191,7 +195,7 @@ class PDFIngestor:
                     text = page.get_text()
                     
                     # Check if page is image-only (very short text)
-                    if len(text.strip()) < 10:
+                    if len(text.strip()) < MIN_TEXT_LENGTH:
                         logger.warning(f"Page {page_num + 1} appears to be image-only (OCR not supported)")
                         failed_pages.append(page_num + 1)
                         continue

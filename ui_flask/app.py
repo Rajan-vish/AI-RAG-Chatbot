@@ -117,6 +117,13 @@ def health():
     return jsonify(result)
 
 
+@app.route("/api/config", methods=["GET"])
+def get_config():
+    """Get backend configuration for UI display."""
+    result = call_backend("/config")
+    return jsonify(result)
+
+
 @app.route("/api/ask", methods=["POST"])
 def ask():
     """Ask a question (RAG query)."""
