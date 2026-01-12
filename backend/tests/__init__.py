@@ -1,2 +1,1 @@
-# Backend tests
-__init__.py
+# Backend tests package

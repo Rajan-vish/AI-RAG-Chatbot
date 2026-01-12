@@ -34,6 +34,8 @@ pydub==0.25.1
 python-dotenv==1.2.1
 pyOpenSSL==25.3.0
 
+# Testing
+pytest==8.3.4
 
 # Optional - needed for using download_models.py
-# einops
+einops

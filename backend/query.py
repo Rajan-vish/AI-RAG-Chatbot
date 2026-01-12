@@ -109,7 +109,7 @@ class QueryService:
         logger.info(f"Processing query: {query[:100]}...")
         
         # Embed query
-        query_embedding = self.embedder.encode([query])[0].tolist()
+        query_embedding = self.embedder.encode([query], task_type="retrieval_query")[0].tolist()
         
         # Retrieve from Chroma
         results = self.chroma_client.query_similar(query_embedding, k=k)

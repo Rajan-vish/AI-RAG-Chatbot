@@ -34,3 +34,9 @@ Thumbs.db
 
 # Logs
 *.log
+
+faq-rag-mod
+.gemini
+.agent
+ANALYSIS_REPORT.md
+IMPLEMENTATION_PLAN.md

@@ -224,6 +224,11 @@ GOOGLE_API_KEY=your_actual_api_key_here
 # Optional: Custom paths (only if you used --custom-path for model download)
 CHROMA_PERSIST_DIR=./chroma_data
 EMBEDDING_MODEL_PATH=./models/nomic-embed-text-v1
+
+# Optional: Embedding Provider (default: local)
+# Set to 'gemini' to use Google Gemini embeddings (requires GOOGLE_API_KEY)
+EMBEDDING_PROVIDER=local
+
 ```
 
 **Note:** If you downloaded the model to the default cache (without `--custom-path`), you don't need to set `EMBEDDING_MODEL_PATH`.

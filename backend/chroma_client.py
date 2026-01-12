@@ -13,16 +13,16 @@ logger = logging.getLogger(__name__)
 class ChromaClient:
     """Client for interacting with local Chroma vector database."""
     
-    COLLECTION_NAME = "documents"
-    
-    def __init__(self, persist_directory: str = "./chroma_data"):
+    def __init__(self, persist_directory: str = "./chroma_data", collection_name: str = "documents"):
         """
         Initialize Chroma client with persistence.
         
         Args:
             persist_directory: Directory for duckdb+parquet persistence
+            collection_name: Name of the collection to use
         """
         self.persist_directory = persist_directory
+        self.collection_name = collection_name
         
         # Ensure directory exists
         os.makedirs(persist_directory, exist_ok=True)
@@ -38,12 +38,12 @@ class ChromaClient:
         
         # Get or create collection
         self.collection = self.client.get_or_create_collection(
-            name=self.COLLECTION_NAME,
+            name=self.collection_name,
             metadata={"hnsw:space": "cosine"}  # Cosine similarity
         )
         
         logger.info(f"ChromaDB initialized. Persist dir: {persist_directory}")
-        logger.info(f"Collection '{self.COLLECTION_NAME}' ready. Current count: {self.collection.count()}")
+        logger.info(f"Collection '{self.collection_name}' ready. Current count: {self.collection.count()}")
     
     def add_chunks(
         self,
@@ -182,9 +182,9 @@ class ChromaClient:
     def reset(self) -> None:
         """Delete all data from collection (use with caution!)."""
         try:
-            self.client.delete_collection(name=self.COLLECTION_NAME)
+            self.client.delete_collection(name=self.collection_name)
             self.collection = self.client.create_collection(
-                name=self.COLLECTION_NAME,
+                name=self.collection_name,
                 metadata={"hnsw:space": "cosine"}
             )
             logger.warning("Collection reset - all data deleted")
@@ -212,6 +212,11 @@ def get_chroma_client(persist_directory: Optional[str] = None) -> ChromaClient:
     
     if _chroma_instance is None:
         persist_dir = persist_directory or os.getenv("CHROMA_PERSIST_DIR", "./chroma_data")
-        _chroma_instance = ChromaClient(persist_directory=persist_dir)
+        
+        # Determine collection name based on provider
+        provider = os.getenv("EMBEDDING_PROVIDER", "local").lower()
+        collection_name = "documents_gemini" if provider == "gemini" else "documents"
+        
+        _chroma_instance = ChromaClient(persist_directory=persist_dir, collection_name=collection_name)
     
     return _chroma_instance
