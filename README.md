@@ -5,12 +5,14 @@ A local-first Retrieval-Augmented Generation (RAG) system that ingests PDFs, emb
 ## 🎯 Key Features
 
 - **Local-first**: All document text and embeddings stay on your machine during ingestion
+- **Hybrid Search**: Combines semantic (vector) and keyword (BM25) retrieval with RRF fusion
+- **Three Retrieval Modes**: `hybrid`, `keyword`, or `semantic` - configurable via environment
 - **PDF ingestion**: PyMuPDF-based PDF parsing with Markdown conversion
 - **Batch Upload**: Upload multiple PDFs simultaneously for efficient processing
-- **Local embeddings**: nomic-embed-text-v1 (CPU/GPU support)
+- **Local embeddings**: nomic-embed-text-v1 or Gemini embeddings (configurable)
 - **Vector storage**: Chroma DB with duckdb+parquet persistence
 - **Cloud LLM**: Google Gemini for answer generation (only retrieved chunks are sent)
-- **Direct Answers**: Conversational responses without inline citations (temperature: 0.5)
+- **Duplicate Detection**: Filters near-duplicate chunks (85% similarity threshold)
 - **Voice Interaction**: Speech-to-text and text-to-speech for natural conversations
 - **API + UI**: FastAPI backend with Flask web interface
 
@@ -68,26 +70,35 @@ sequenceDiagram
     API-->>User: Ingestion Complete
 ```
 
-### 3. Text Chat Flow
+### 3. Text Chat Flow (Hybrid Search)
 
-How a text query is answered using RAG.
+How a text query is answered using hybrid RAG retrieval.
 
 ```mermaid
 sequenceDiagram
     participant User
     participant API as FastAPI
     participant Embed as Nomic Embedder
+    participant BM25 as BM25 Keyword
     participant DB as Chroma DB
     participant LLM as Gemini API
 
     User->>API: Send Query
     API->>Embed: Embed Query
     Embed-->>API: Query Vector
-    API->>DB: Retrieve Top 5 Chunks
-    DB-->>API: Context Chunks
+    
+    par Hybrid Retrieval
+        API->>DB: Semantic Search (Top K)
+        DB-->>API: Semantic Results
+    and
+        API->>BM25: Keyword Search (Top K)
+        BM25-->>API: Keyword Results
+    end
+    
+    API->>API: RRF Fusion + Deduplication
     API->>LLM: Send Prompt (Context + Query)
     LLM-->>API: Generated Answer
-    API-->>User: Answer + Citations
+    API-->>User: Answer + Citations + Stats
 ```
 
 ### 4. Voice Interaction Flow
@@ -220,14 +231,21 @@ cp .env.example .env
 # Required: Your Google Gemini API key
 GOOGLE_API_KEY=your_actual_api_key_here
 
-# Optional: Custom paths (only if you used --custom-path for model download)
+# Optional: Custom paths
 CHROMA_PERSIST_DIR=./chroma_data
 EMBEDDING_MODEL_PATH=./models/nomic-embed-text-v1
 
-# Optional: Embedding Provider (default: local)
-# Set to 'gemini' to use Google Gemini embeddings (requires GOOGLE_API_KEY)
+# Embedding Provider: 'auto', 'gemini', or 'local'
 EMBEDDING_PROVIDER=local
 
+# Query Configuration
+RETRIEVAL_K=10              # Number of chunks to retrieve (default: 5)
+LLM_TEMPERATURE=0.3         # Lower = more factual (default: 0.3)
+DUPLICATE_THRESHOLD=0.85    # Similarity threshold for deduplication
+
+# Retrieval Mode: 'hybrid', 'keyword', or 'semantic'
+RETRIEVAL_MODE=hybrid       # Default: hybrid (combines semantic + keyword)
+RRF_K=60                    # RRF fusion constant (default: 60)
 ```
 
 **Note:** If you downloaded the model to the default cache (without `--custom-path`), you don't need to set `EMBEDDING_MODEL_PATH`.
