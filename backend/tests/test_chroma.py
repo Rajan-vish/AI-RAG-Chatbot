@@ -14,7 +14,7 @@ def temp_chroma():
     client = ChromaClient(persist_directory=temp_dir)
     yield client
     # Cleanup
-    shutil.rmtree(temp_dir)
+    shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 def test_chroma_initialization(temp_chroma):

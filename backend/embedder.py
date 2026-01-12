@@ -173,6 +173,13 @@ class Embedder:
         if self.provider == "gemini":
             return "api"
         return self._device
+    
+    @property
+    def active_model_name(self) -> str:
+        """Get the name of the active embedding model."""
+        if self.provider == "gemini":
+            return self.GEMINI_MODEL_NAME
+        return self.LOCAL_MODEL_NAME
 
 
 # Singleton instance

@@ -265,13 +265,16 @@ class PDFIngestor:
         ids = [f"{doc_id}___{c['chunk_index']}" for c in all_chunks]
         documents = chunk_texts
         embeddings_list = embeddings.tolist()
+        model_name = self.embedder.active_model_name
+
         metadatas = [
             {
                 "doc_id": doc_id,
                 "source_filename": filename,
                 "page_number": c["page_number"],
                 "chunk_index": c["chunk_index"],
-                "ingested_at": ingested_at
+                "ingested_at": ingested_at,
+                "embedding_model": model_name
             }
             for c in all_chunks
         ]
