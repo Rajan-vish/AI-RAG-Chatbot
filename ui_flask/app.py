@@ -248,14 +248,24 @@ def voice_conversation():
 
 @app.errorhandler(404)
 def not_found(error):
-    """Handle 404 errors."""
+    """
+    Handle 404 errors.
+    Returns JSON for API routes, HTML for page routes.
+    """
+    if request.path.startswith('/api/'):
+        return jsonify({"error": "Not found", "status": 404}), 404
     return render_template("index.html"), 404
 
 
 @app.errorhandler(500)
 def internal_error(error):
-    """Handle 500 errors."""
-    return jsonify({"error": "Internal server error"}), 500
+    """
+    Handle 500 errors.
+    Returns JSON for API routes, HTML for page routes.
+    """
+    if request.path.startswith('/api/'):
+        return jsonify({"error": "Internal server error", "status": 500}), 500
+    return render_template("index.html"), 500
 
 
 # ============================================================================

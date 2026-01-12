@@ -10,7 +10,7 @@ A local-first Retrieval-Augmented Generation (RAG) system that ingests PDFs, emb
 - **Local embeddings**: nomic-embed-text-v1 (CPU/GPU support)
 - **Vector storage**: Chroma DB with duckdb+parquet persistence
 - **Cloud LLM**: Google Gemini for answer generation (only retrieved chunks are sent)
-- **Direct Answers**: Conversational responses without inline citations (temperature: -0.5)
+- **Direct Answers**: Conversational responses without inline citations (temperature: 0.5)
 - **Voice Interaction**: Speech-to-text and text-to-speech for natural conversations
 - **API + UI**: FastAPI backend with Flask web interface
 
@@ -179,7 +179,7 @@ This will install:
 - PyMuPDF (PDF parsing)
 - sentence-transformers (embeddings)
 - ChromaDB (vector database)
-- google-generativeai (Gemini LLM)
+- google-genai (Gemini LLM)
 - Flask & Flask-CORS (Web UI)
 - SpeechRecognition (Speech-to-Text)
 - gTTS & pyttsx3 (Text-to-Speech)
@@ -195,8 +195,7 @@ python download_model.py
 
 **Option 2: Download to custom ./models/ directory**
 
-```bash
-python download_model.py --custom-path
+```bashpython download_model.py
 ```
 
 This will download the `nomic-embed-text-v1` model (~100-500MB). The model is required before running the application.

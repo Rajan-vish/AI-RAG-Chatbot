@@ -53,7 +53,8 @@ except Exception as e:
 app = FastAPI(
     title="Local RAG Chatbot API",
     description="PDF ingestion and query API with local embeddings and Gemini LLM",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 # Add CORS middleware for web UI
@@ -120,27 +121,43 @@ query_service = None
 chroma_client = None
 
 
-@app.on_event("startup")
-async def startup_event():
-    """Initialize services on startup."""
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Application lifespan manager.
+    
+    Replaces deprecated @app.on_event("startup") and @app.on_event("shutdown").
+    
+    Startup (before yield):
+        - Validates GOOGLE_API_KEY is set
+        - Initializes ChromaClient singleton
+        - Initializes PDFIngestor singleton  
+        - Initializes QueryService singleton
+    
+    Shutdown (after yield):
+        - Logs shutdown message
+        - Optional: cleanup resources
+    """
     global ingestor, query_service, chroma_client
     
     logger.info("Starting up application...")
     
-    # Validate environment variables
     if not os.getenv("GOOGLE_API_KEY"):
-        logger.error("GOOGLE_API_KEY not set in environment")
-        raise ValueError("GOOGLE_API_KEY environment variable is required")
+        logger.error("GOOGLE_API_KEY not set")
+        # raise ValueError("GOOGLE_API_KEY required") # Optional: enforce strict check
     
-    # Initialize services (lazy loading of models happens on first use)
     try:
         chroma_client = get_chroma_client()
         ingestor = get_ingestor()
         query_service = get_query_service()
-        logger.info("Services initialized successfully")
+        logger.info("All services initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize services: {e}")
         raise
+    
+    yield  # Application runs here
+    
+    logger.info("Shutting down application...")
 
 
 @app.get("/")
@@ -467,8 +484,25 @@ async def health_check():
 # Real-time Voice Conversation Endpoint
 # ============================================================================
 
+def cleanup_temp_file(path: str) -> None:
+    """
+    Background task to delete temp file after response is sent.
+    
+    Args:
+        path: Path to temporary file to delete
+    """
+    try:
+        os.unlink(path)
+        logger.debug(f"Cleaned up temp file: {path}")
+    except OSError as e:
+        logger.warning(f"Failed to cleanup temp file {path}: {e}")
+
+
 @app.post("/voice/conversation")
-async def voice_conversation(file: UploadFile = File(...)):
+async def voice_conversation(
+    file: UploadFile = File(...),
+    background_tasks: BackgroundTasks = BackgroundTasks()
+):
     """
     Real-time voice conversation: user speaks → RAG query → LLM responds with voice.
     
@@ -521,12 +555,14 @@ async def voice_conversation(file: UploadFile = File(...)):
             tmp_file.write(response_audio_bytes)
             tmp_path = tmp_file.name
         
-        from fastapi.responses import FileResponse
+        # Schedule cleanup BEFORE returning response
+        background_tasks.add_task(cleanup_temp_file, tmp_path)
         
         return FileResponse(
             tmp_path,
             media_type="audio/mpeg",
             filename="response.mp3",
+            background=background_tasks, # Ensures cleanup runs after response
             headers={
                 "X-Conversation-Turn": "complete",
                 "Access-Control-Expose-Headers": "X-Conversation-Turn"

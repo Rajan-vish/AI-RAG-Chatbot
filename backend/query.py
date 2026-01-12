@@ -1,10 +1,15 @@
 """
 Query pipeline: Query embedding → Chroma retrieval → prompt building → Gemini LLM.
+
+Uses the new google-genai SDK (migrated from deprecated google-generativeai).
 """
 import os
 import logging
-from typing import Dict, List, Any
-import google.generativeai as genai
+from typing import Dict, List, Any, Optional
+
+# NEW: google-genai SDK imports
+from google import genai
+from google.genai import types
 
 from backend.embedder import get_embedder
 from backend.chroma_client import get_chroma_client
@@ -54,40 +59,49 @@ Instructions:
             chunk_idx = metadata.get("chunk_index", "N/A")
             
             context_parts.append(
-                f"--- [source: {source} | page: {page} | chunk: {chunk_idx}] ---\n{document}"
+                f"---\n[source: {source} | page: {page} | chunk: {chunk_idx}] ---\n{document}"
             )
         
         context_str = "\n\n".join(context_parts)
         
+        # FIX: Remove unused format parameters
         prompt = PromptBuilder.TEMPLATE.format(
             context=context_str,
-            user_question=query,
-            source_filename="{source_filename}",
-            page_number="{page_number}",
-            chunk_index="{chunk_index}"
+            user_question=query
         )
         
         return prompt
 
 
 class QueryService:
-    """Main query orchestrator with Gemini integration."""
+    """
+    Main query orchestrator with Gemini integration.
     
-    def __init__(self, api_key: str = None, model_name: str = "gemini-2.5-flash-lite"):
+    Uses the new google-genai SDK pattern with centralized Client object.
+    """
+    
+    def __init__(
+        self, 
+        api_key: Optional[str] = None, 
+        model_name: str = "gemini-2.5-flash"
+    ):
         """
         Initialize query service with Gemini API.
         
         Args:
             api_key: Google API key (defaults to GOOGLE_API_KEY env var)
-            model_name: Gemini model name
+            model_name: Gemini model name for generation
+        
+        Raises:
+            ValueError: If GOOGLE_API_KEY not set
         """
         self.api_key = api_key or os.getenv("GOOGLE_API_KEY")
         if not self.api_key:
             raise ValueError("GOOGLE_API_KEY not set in environment")
         
-        # Configure Gemini
-        genai.configure(api_key=self.api_key)
-        self.model = genai.GenerativeModel(model_name)
+        # NEW: Create genai.Client (replaces genai.configure + GenerativeModel)
+        self.client = genai.Client(api_key=self.api_key)
+        self.model_name = model_name
         
         self.embedder = get_embedder()
         self.chroma_client = get_chroma_client()
@@ -104,11 +118,15 @@ class QueryService:
             k: Number of chunks to retrieve (default: 5)
         
         Returns:
-            Dict with answer, citations, retrieved_chunks
+            Dict with keys:
+                - answer (str): Generated answer text
+                - citations (List[Dict]): Source citations
+                - retrieved_chunks (List[Dict]): Raw retrieved chunks
         """
         logger.info(f"Processing query: {query[:100]}...")
         
         # Embed query
+        # Support task_type="retrieval_query" for Gemini
         query_embedding = self.embedder.encode([query], task_type="retrieval_query")[0].tolist()
         
         # Retrieve from Chroma
@@ -137,16 +155,16 @@ class QueryService:
         
         logger.debug(f"Built prompt with {len(retrieved_chunks)} chunks")
         
-        # Call Gemini
+        # Call Gemini using NEW google-genai SDK
         try:
-            generation_config = genai.types.GenerationConfig(
-                temperature=0.5,
-                max_output_tokens=512
-            )
-            
-            response = self.model.generate_content(
-                prompt,
-                generation_config=generation_config
+            # NEW: Use client.models.generate_content with types.GenerateContentConfig
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.5,
+                    max_output_tokens=512
+                )
             )
             
             answer = response.text.strip()
@@ -157,7 +175,9 @@ class QueryService:
             
             # Check for rate limiting
             if "quota" in str(e).lower() or "rate" in str(e).lower():
-                raise RuntimeError("Gemini API rate limit exceeded. Please try again later.") from e
+                raise RuntimeError(
+                    "Gemini API rate limit exceeded. Please try again later."
+                ) from e
             
             raise RuntimeError(f"Gemini API error: {e}") from e
         
@@ -171,20 +191,18 @@ class QueryService:
                 "chunk_index": metadata.get("chunk_index")
             })
         
-        result = {
+        return {
             "answer": answer,
             "citations": citations,
             "retrieved_chunks": retrieved_chunks
         }
-        
-        return result
 
 
-# Singleton instance
-_query_service_instance = None
+# Singleton instance with type hint
+_query_service_instance: Optional[QueryService] = None
 
 
-def get_query_service(api_key: str = None) -> QueryService:
+def get_query_service(api_key: Optional[str] = None) -> QueryService:
     """
     Get or create the singleton query service instance.
     

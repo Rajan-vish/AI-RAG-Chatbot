@@ -101,36 +101,4 @@ class BackendAPIClient:
         response.raise_for_status()
         return response.json()
     
-    def transcribe_audio(self, audio_file_path: str) -> Dict[str, str]:
-        """Transcribe audio to text."""
-        with open(audio_file_path, "rb") as f:
-            files = {"audio": f}
-            response = requests.post(
-                f"{self.base_url}/voice/transcribe",
-                files=files,
-                timeout=60
-            )
-            response.raise_for_status()
-            return response.json()
-    
-    def synthesize_speech(self, text: str) -> bytes:
-        """Convert text to speech (returns MP3 bytes)."""
-        response = requests.post(
-            f"{self.base_url}/voice/synthesize",
-            json={"text": text},
-            timeout=30
-        )
-        response.raise_for_status()
-        return response.content
-    
-    def voice_query(self, audio_file_path: str) -> bytes:
-        """Full voice conversation (returns MP3 bytes)."""
-        with open(audio_file_path, "rb") as f:
-            files = {"audio": f}
-            response = requests.post(
-                f"{self.base_url}/voice/query",
-                files=files,
-                timeout=60
-            )
-            response.raise_for_status()
-            return response.content
+

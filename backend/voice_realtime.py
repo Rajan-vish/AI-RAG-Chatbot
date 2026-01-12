@@ -96,12 +96,12 @@ class RealtimeVoiceConversation:
             if tmp_input and os.path.exists(tmp_input):
                 try:
                     os.unlink(tmp_input)
-                except:
+                except OSError:
                     pass
             if tmp_output and os.path.exists(tmp_output):
                 try:
                     os.unlink(tmp_output)
-                except:
+                except OSError:
                     pass
     
     async def synthesize_stream(self, text: str) -> bytes:
