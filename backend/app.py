@@ -219,7 +219,9 @@ async def upload_document(file: UploadFile = File(...)):
         if ingestor is None:
             ingestor = get_ingestor()
 
+        logger.info("Calling process_pdf...")
         result = ingestor.process_pdf(tmp_path, file.filename)
+        logger.info("process_pdf finished")
 
         # Clean up temp file
         os.unlink(tmp_path)
