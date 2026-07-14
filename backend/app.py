@@ -123,24 +123,25 @@ async def lifespan(app: FastAPI):
         - Optional: cleanup resources
     """
     global ingestor, query_service, chroma_client
-    
+
     logger.info("Starting up application...")
-    
+
     if not os.getenv("GOOGLE_API_KEY"):
         logger.error("GOOGLE_API_KEY not set")
         # raise ValueError("GOOGLE_API_KEY required") # Optional: enforce strict check
-    
     try:
         chroma_client = get_chroma_client()
-        ingestor = get_ingestor()
         query_service = get_query_service()
+
+        # Lazy initialize ingestor on first PDF upload
+        ingestor = None
         logger.info("All services initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize services: {e}")
         raise
-    
+
     yield  # Application runs here
-    
+
     logger.info("Shutting down application...")
 
 
@@ -197,27 +198,34 @@ async def upload_document(file: UploadFile = File(...)):
     Returns:
         IngestResponse with doc_id, status, chunks, and failed_pages
     """
+    global ingestor
+
     # Validate file type
     if not file.filename.lower().endswith('.pdf'):
         raise HTTPException(status_code=400, detail="Only PDF files are supported")
-    
+
     logger.info(f"Received upload: {file.filename}")
-    
+
     # Save to temporary file
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf', dir=TEMP_UPLOAD_DIR) as tmp_file:
             content = await file.read()
             tmp_file.write(content)
             tmp_path = tmp_file.name
-        
+
         # Process PDF
-        result = ingestor.process_pdf(tmp_path, file.filename)
         
+
+        if ingestor is None:
+            ingestor = get_ingestor()
+
+        result = ingestor.process_pdf(tmp_path, file.filename)
+
         # Clean up temp file
         os.unlink(tmp_path)
-        
+
         return IngestResponse(**result)
-        
+
     except ValueError as e:
         logger.error(f"Validation error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
@@ -237,14 +245,16 @@ async def upload_documents_batch(files: List[UploadFile] = File(...)):
     Returns:
         List of IngestResponse objects
     """
+    global ingestor
+
     if not files:
         raise HTTPException(status_code=400, detail="No files provided")
-    
+
     if len(files) > 10:
         raise HTTPException(status_code=400, detail="Maximum 10 files allowed per batch")
-    
+
     results = []
-    
+
     for file in files:
         # Validate file type
         if not file.filename.lower().endswith('.pdf'):
@@ -256,24 +266,27 @@ async def upload_documents_batch(files: List[UploadFile] = File(...)):
             ))
             logger.warning(f"Skipped non-PDF file: {file.filename}")
             continue
-        
+
         logger.info(f"Processing batch upload: {file.filename}")
-        
+
         try:
             # Save to temporary file
             with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf', dir=TEMP_UPLOAD_DIR) as tmp_file:
                 content = await file.read()
                 tmp_file.write(content)
                 tmp_path = tmp_file.name
-            
+
             # Process PDF
+            if ingestor is None:
+                ingestor = get_ingestor()
+
             result = ingestor.process_pdf(tmp_path, file.filename)
-            
+
             # Clean up temp file
             os.unlink(tmp_path)
-            
+
             results.append(IngestResponse(**result))
-            
+
         except Exception as e:
             logger.error(f"Failed to process {file.filename}: {e}")
             results.append(IngestResponse(
@@ -282,7 +295,7 @@ async def upload_documents_batch(files: List[UploadFile] = File(...)):
                 chunks=0,
                 failed_pages=[],
             ))
-    
+
     return results
 
 
@@ -296,14 +309,14 @@ async def list_documents():
     """
     try:
         results = chroma_client.get_all_documents()
-        
+
         # Aggregate by doc_id
         doc_map = {}
         for i, metadata in enumerate(results["metadatas"]):
             doc_id = metadata.get("doc_id")
             if not doc_id:
                 continue
-            
+
             if doc_id not in doc_map:
                 doc_map[doc_id] = {
                     "doc_id": doc_id,
@@ -312,10 +325,10 @@ async def list_documents():
                     "chunks": 0,
                     "ingested_at": metadata.get("ingested_at", "")
                 }
-            
+
             doc_map[doc_id]["pages"].add(metadata.get("page_number"))
             doc_map[doc_id]["chunks"] += 1
-        
+
         # Convert to list
         documents = []
         for doc_id, data in doc_map.items():
@@ -326,9 +339,9 @@ async def list_documents():
                 chunks=data["chunks"],
                 ingested_at=data["ingested_at"]
             ))
-        
+
         return documents
-        
+
     except Exception as e:
         logger.error(f"Failed to list documents: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to list documents: {str(e)}")
@@ -347,20 +360,20 @@ async def get_document(doc_id: str):
     """
     try:
         results = chroma_client.get_documents_by_doc_id(doc_id)
-        
+
         if not results["metadatas"]:
             raise HTTPException(status_code=404, detail=f"Document {doc_id} not found")
-        
+
         # Aggregate metadata
         pages = set()
         source_filename = "unknown"
         ingested_at = ""
-        
+
         for metadata in results["metadatas"]:
             pages.add(metadata.get("page_number"))
             source_filename = metadata.get("source_filename", source_filename)
             ingested_at = metadata.get("ingested_at", ingested_at)
-        
+
         return DocumentInfo(
             doc_id=doc_id,
             source_filename=source_filename,
@@ -368,7 +381,7 @@ async def get_document(doc_id: str):
             chunks=len(results["metadatas"]),
             ingested_at=ingested_at
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -390,13 +403,13 @@ async def delete_document(doc_id: str):
     try:
         # Check if document exists first
         results = chroma_client.get_documents_by_doc_id(doc_id)
-        
+
         if not results["metadatas"]:
             raise HTTPException(status_code=404, detail=f"Document {doc_id} not found")
-        
+
         # Delete the document
         count = chroma_client.delete_document(doc_id)
-        
+
         logger.info(f"Deleted document {doc_id}, removed {count} chunks")
         return {
             "status": "success",
@@ -404,7 +417,7 @@ async def delete_document(doc_id: str):
             "doc_id": doc_id,
             "message": f"Successfully deleted document and {count} chunk(s)"
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -458,16 +471,16 @@ async def _process_query(query: str) -> QueryResponse:
                 citations=[],
                 retrieved_chunks=[]
             )
-        
+
         # Process query
         result = query_service.answer_query(query, k=5)
-        
+
         return QueryResponse(
             answer=result["answer"],
             citations=[Citation(**c) for c in result["citations"]],
             retrieved_chunks=[RetrievedChunk(**c) for c in result["retrieved_chunks"]]
         )
-        
+
     except RuntimeError as e:
         # Handle rate limiting and API errors
         if "rate limit" in str(e).lower():
@@ -532,52 +545,52 @@ async def voice_conversation(
     try:
         # Read audio content
         audio_content = await file.read()
-        
+
         logger.info(f"Received voice conversation request, audio size: {len(audio_content)} bytes")
-        
+
         # Get real-time conversation handler
         conversation = get_realtime_conversation()
-        
+
         # Define RAG callback
         async def rag_callback(user_text: str) -> str:
             """Query RAG system with user's question."""
             if chroma_client.count() == 0:
                 return "I don't have any documents to answer from. Please upload some documents first."
-            
+
             result = query_service.answer_query(user_text, k=5)
             return result["answer"]
-        
+
         # Process conversation turn
         response_audio_bytes = await conversation.process_conversation_turn(
             audio_content,
             rag_callback
         )
-        
+
         if not response_audio_bytes:
             raise HTTPException(
                 status_code=400,
                 detail="Could not process voice conversation. Please speak clearly and try again."
             )
-        
+
         # Create temporary file for response
         with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3', mode='wb', dir=TEMP_UPLOAD_DIR) as tmp_file:
             tmp_file.write(response_audio_bytes)
             tmp_path = tmp_file.name
-        
+
         # Schedule cleanup BEFORE returning response
         background_tasks.add_task(cleanup_temp_file, tmp_path)
-        
+
         return FileResponse(
             tmp_path,
             media_type="audio/mpeg",
             filename="response.mp3",
-            background=background_tasks, # Ensures cleanup runs after response
+            background=background_tasks,  # Ensures cleanup runs after response
             headers={
                 "X-Conversation-Turn": "complete",
                 "Access-Control-Expose-Headers": "X-Conversation-Turn"
             }
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
