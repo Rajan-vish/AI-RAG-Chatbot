@@ -7,7 +7,7 @@ import uuid
 import gc
 import logging
 from datetime import datetime
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Generator
 import fitz  # PyMuPDF
 from transformers import AutoTokenizer
 
@@ -172,24 +172,33 @@ class PDFIngestor:
         self.markdown_converter = MarkdownConverter()
         self.chunker = None  # Lazy initialized on first use
 
-    def extract_pdf_text(self, pdf_path: str) -> Tuple[List[Tuple[int, str]], List[int]]:
+    def extract_pdf_text(self, pdf_path: str, failed_pages: List[int]) -> Generator[Tuple[int, str], None, None]:
         """
-        Extract text from PDF with page-level tracking.
+        Extract text from PDF with page-level tracking, streaming one page at a time.
+
+        This is a generator: it yields (page_number, text) tuples one page at a
+        time instead of accumulating every page's text in memory. Failed or
+        image-only pages are recorded into the caller-supplied `failed_pages`
+        list (mutated in place) so callers retain the exact same failure
+        reporting behavior without the generator needing to return a tuple.
 
         Args:
             pdf_path: Path to PDF file
+            failed_pages: List that page numbers of failed/image-only pages
+                will be appended to (mutated in place)
 
-        Returns:
-            Tuple of (page_texts, failed_pages)
-            page_texts: List of (page_number, text) tuples
-            failed_pages: List of page numbers that failed
+        Yields:
+            (page_number, text) tuples for pages with extractable text
         """
-        page_texts = []
-        failed_pages = []
-
         try:
             doc = fitz.open(pdf_path)
+        except Exception as e:
+            logger.error(f"Failed to open PDF: {e}")
+            raise ValueError(f"Cannot open PDF file: {e}")
 
+        pages_extracted = 0
+
+        try:
             for page_num in range(len(doc)):
                 try:
                     page = doc[page_num]
@@ -201,24 +210,27 @@ class PDFIngestor:
                         failed_pages.append(page_num + 1)
                         continue
 
-                    page_texts.append((page_num + 1, text))
+                    pages_extracted += 1
+                    yield (page_num + 1, text)
 
                 except Exception as e:
                     logger.error(f"Failed to extract page {page_num + 1}: {e}")
                     failed_pages.append(page_num + 1)
 
+            logger.info(f"Extracted {pages_extracted} pages, {len(failed_pages)} failed")
+
+        finally:
             doc.close()
-            logger.info(f"Extracted {len(page_texts)} pages, {len(failed_pages)} failed")
-
-        except Exception as e:
-            logger.error(f"Failed to open PDF: {e}")
-            raise ValueError(f"Cannot open PDF file: {e}")
-
-        return page_texts, failed_pages
 
     def process_pdf(self, pdf_path: str, filename: str) -> Dict:
         """
         Complete PDF ingestion pipeline.
+
+        Streams the PDF page-by-page directly from extract_pdf_text() (a
+        generator), and within each page streams chunk embedding/storage in
+        batches. Only one page's text/chunks and one embedding batch are ever
+        held in memory at a time. No global page-text or chunk list is
+        accumulated across the whole document.
 
         Args:
             pdf_path: Path to PDF file
@@ -230,92 +242,85 @@ class PDFIngestor:
         doc_id = str(uuid.uuid4())
         logger.info(f"Starting ingestion for {filename} (doc_id: {doc_id})")
 
-        # Extract text from PDF
-        page_texts, failed_pages = self.extract_pdf_text(pdf_path)
-
-        if not page_texts:
-            raise ValueError("No text could be extracted from PDF. It may be image-only (OCR not supported).")
-
         # Lazy-initialize chunker on first use
         if self.chunker is None:
             self.chunker = TextChunker()
 
-        # Process each page
-        all_chunks = []
+        ingested_at = datetime.now().isoformat()
+        BATCH_SIZE = 32
+        total_stored = 0
         chunk_index = 0
+        pages_processed = 0
+        failed_pages: List[int] = []
 
-        for page_num, text in page_texts:
+        # Stream pages directly from the generator; nothing from a finished
+        # page is retained once we move on to the next one.
+        for page_num, text in self.extract_pdf_text(pdf_path, failed_pages):
+            pages_processed += 1
+
             # Convert to Markdown
             markdown_text = self.markdown_converter.convert(text)
 
-            # Chunk text
+            # Chunk this page's text
             chunks = self.chunker.chunk(markdown_text)
 
-            for chunk_text in chunks:
-                all_chunks.append({
-                    "text": chunk_text,
-                    "page_number": page_num,
-                    "chunk_index": chunk_index
-                })
-                chunk_index += 1
+            # Embed and store this page's chunks in batches immediately
+            for start in range(0, len(chunks), BATCH_SIZE):
+                batch_chunks = chunks[start:start + BATCH_SIZE]
 
-        # Free page_texts memory, no longer needed
-        del page_texts
-        gc.collect()
+                batch_embeddings = retry_with_backoff(
+                    lambda: self.embedder.encode(batch_chunks, batch_size=8),
+                    max_retries=3,
+                    initial_delay=1.0
+                )
 
-        logger.info(f"Generated {len(all_chunks)} chunks")
+                embeddings_list = batch_embeddings.tolist()
 
-        chunk_texts = [c["text"] for c in all_chunks]
-        ingested_at = datetime.now().isoformat()
+                batch_metadatas = []
+                batch_ids = []
 
-        # Embed and store in batches to limit peak memory usage
-        BATCH_SIZE = 32
-        total_stored = 0
+                for _ in batch_chunks:
+                    batch_metadatas.append({
+                        "doc_id": doc_id,
+                        "source_filename": filename,
+                        "page_number": page_num,
+                        "chunk_index": chunk_index,
+                        "ingested_at": ingested_at,
+                        "embedding_model": self.embedder.active_model_name
+                    })
 
-        for start in range(0, len(chunk_texts), BATCH_SIZE):
-            batch_chunks = chunk_texts[start:start + BATCH_SIZE]
-            batch_meta = all_chunks[start:start + BATCH_SIZE]
+                    batch_ids.append(f"{doc_id}___{chunk_index}")
+                    chunk_index += 1
 
-            batch_embeddings = retry_with_backoff(
-                lambda: self.embedder.encode(batch_chunks, batch_size=8),
-                max_retries=3,
-                initial_delay=1.0
-            )
+                self.chroma_client.add_chunks(
+                    ids=batch_ids,
+                    documents=batch_chunks,
+                    embeddings=embeddings_list,
+                    metadatas=batch_metadatas
+                )
 
-            batch_ids = [
-                f"{doc_id}___{c['chunk_index']}"
-                for c in batch_meta
-            ]
+                total_stored += len(batch_ids)
 
-            batch_metadatas = [
-                {
-                    "doc_id": doc_id,
-                    "source_filename": filename,
-                    "page_number": c["page_number"],
-                    "chunk_index": c["chunk_index"],
-                    "ingested_at": ingested_at,
-                    "embedding_model": self.embedder.active_model_name
-                }
-                for c in batch_meta
-            ]
+                del batch_embeddings
+                del embeddings_list
+                batch_metadatas.clear()
+                batch_ids.clear()
+                del batch_ids
+                del batch_metadatas
+                del batch_chunks
+                gc.collect()
 
-            self.chroma_client.add_chunks(
-                ids=batch_ids,
-                documents=batch_chunks,
-                embeddings=batch_embeddings.tolist(),
-                metadatas=batch_metadatas
-            )
-
-            total_stored += len(batch_ids)
-
-            # Free batch memory before next iteration
-            del batch_embeddings, batch_ids, batch_metadatas
-            del batch_chunks, batch_meta
+            # Free this page's memory before moving to the next page
+            chunks.clear()
+            del chunks
+            del markdown_text
+            del text
             gc.collect()
 
-        # Free remaining large objects
-        del chunk_texts, all_chunks
-        gc.collect()
+        if pages_processed == 0:
+            raise ValueError("No text could be extracted from PDF. It may be image-only (OCR not supported).")
+
+        logger.info(f"Generated {total_stored} chunks")
 
         status = "partial" if failed_pages else "ingested"
 
