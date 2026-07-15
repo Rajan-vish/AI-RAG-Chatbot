@@ -9,7 +9,7 @@ import logging
 from datetime import datetime
 from typing import List, Dict, Tuple, Optional, Generator
 import fitz  # PyMuPDF
-from transformers import AutoTokenizer
+import tiktoken
 
 from backend.embedder import get_embedder
 from backend.chroma_client import get_chroma_client
@@ -78,25 +78,76 @@ class MarkdownConverter:
 
 
 class TextChunker:
-    """Token-based text chunker with fixed window and overlap."""
+    """
+    Token-based text chunker with fixed window and overlap.
 
-    def __init__(self, tokenizer_name: str = "bert-base-uncased", chunk_size: int = 200, overlap: int = 20):
+    Redesigned to NEVER tokenize an entire page in one call. Text is split
+    into paragraph-sized blocks first (with a hard character-length safety
+    cap for pathological single-paragraph pages), each block is tokenized
+    individually, and tokens are fed into a rolling buffer that is flushed
+    into a chunk as soon as it reaches chunk_size. Peak memory is bounded
+    by roughly (one block's tokens + chunk_size + overlap) instead of
+    (entire page's tokens), regardless of how large the source page is.
+    """
+
+    # Hard cap on characters tokenized in a single tiktoken.encode() call.
+    # This guards against pages that have no paragraph breaks at all (e.g.
+    # a huge block of unbroken text), which would otherwise still produce
+    # one giant token list even after paragraph splitting.
+    MAX_BLOCK_CHARS = 2000
+
+    def __init__(self, tokenizer_name: str = "cl100k_base", chunk_size: int = 200, overlap: int = 20):
         """
         Initialize chunker with tokenizer.
 
         Args:
-            tokenizer_name: HuggingFace tokenizer name
+            tokenizer_name: tiktoken encoding name (e.g. "cl100k_base")
             chunk_size: Maximum tokens per chunk
             overlap: Token overlap between chunks
         """
-        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        self.tokenizer = tiktoken.get_encoding(tokenizer_name)
         self.chunk_size = chunk_size
         self.overlap = overlap
         logger.info(f"TextChunker initialized with {tokenizer_name}, chunk_size={chunk_size}, overlap={overlap}")
 
+    def _iter_blocks(self, text: str):
+        """
+        Split text into paragraph-sized blocks, with a hard character cap
+        per block so a single encode() call can never blow up regardless
+        of the page's formatting (e.g. one huge paragraph with no breaks).
+
+        Yields:
+            str: text blocks, each small enough to tokenize cheaply
+        """
+        paragraphs = re.split(r'\n\s*\n', text)
+
+        if len(paragraphs) <= 1:
+            # No blank-line paragraph breaks found; fall back to single
+            # newlines so we still get reasonably small blocks.
+            paragraphs = text.split('\n')
+
+        for para in paragraphs:
+            if not para.strip():
+                continue
+
+            if len(para) > self.MAX_BLOCK_CHARS:
+                # Pathologically long paragraph (e.g. no newlines at all) --
+                # split by fixed character length as a safety net so we
+                # never tokenize a huge chunk of text in one call.
+                for i in range(0, len(para), self.MAX_BLOCK_CHARS):
+                    yield para[i:i + self.MAX_BLOCK_CHARS]
+            else:
+                yield para
+
     def chunk(self, text: str) -> List[str]:
         """
         Chunk text into fixed-size token windows with overlap.
+
+        Processes text incrementally: paragraph/block by paragraph/block,
+        tokenizing only one small block at a time and feeding tokens into
+        a rolling buffer. A chunk is emitted (and decoded) as soon as the
+        buffer reaches chunk_size, so no single large token list is ever
+        held in memory.
 
         Args:
             text: Text to chunk
@@ -104,30 +155,34 @@ class TextChunker:
         Returns:
             List of text chunks
         """
-        # Tokenize text
-        tokens = self.tokenizer.encode(text, add_special_tokens=False)
-
-        if len(tokens) == 0:
+        if not text or not text.strip():
             return []
 
-        chunks = []
-        start = 0
+        chunks: List[str] = []
+        buffer: List[int] = []
 
-        while start < len(tokens):
-            # Get chunk tokens
-            end = min(start + self.chunk_size, len(tokens))
-            chunk_tokens = tokens[start:end]
+        for block in self._iter_blocks(text):
+            block_tokens = self.tokenizer.encode(block)
+            if not block_tokens:
+                continue
 
-            # Decode back to text
-            chunk_text = self.tokenizer.decode(chunk_tokens, skip_special_tokens=True)
-            chunks.append(chunk_text)
+            buffer.extend(block_tokens)
+            del block_tokens
 
-            # Move start position with overlap
-            if end >= len(tokens):
-                break
-            start += self.chunk_size - self.overlap
+            while len(buffer) >= self.chunk_size:
+                chunk_tokens = buffer[:self.chunk_size]
+                chunks.append(self.tokenizer.decode(chunk_tokens))
 
-        logger.debug(f"Chunked text into {len(chunks)} chunks (total tokens: {len(tokens)})")
+                if self.overlap > 0:
+                    buffer = buffer[self.chunk_size - self.overlap:]
+                else:
+                    buffer = buffer[self.chunk_size:]
+
+        # Flush any remaining tokens as a final (possibly shorter) chunk
+        if buffer:
+            chunks.append(self.tokenizer.decode(buffer))
+
+        logger.debug(f"Chunked text into {len(chunks)} chunks")
         return chunks
 
 
@@ -144,10 +199,8 @@ def retry_with_backoff(func, max_retries: int = 3, initial_delay: float = 1.0):
         Function result or raises last exception
     """
     import time
-
     last_exception = None
     delay = initial_delay
-
     for attempt in range(max_retries):
         try:
             return func()
@@ -158,7 +211,6 @@ def retry_with_backoff(func, max_retries: int = 3, initial_delay: float = 1.0):
                 logger.info(f"Retrying in {delay}s...")
                 time.sleep(delay)
                 delay *= 2  # Exponential backoff
-
     raise last_exception
 
 
@@ -178,7 +230,7 @@ class PDFIngestor:
 
         This is a generator: it yields (page_number, text) tuples one page at a
         time instead of accumulating every page's text in memory. Failed or
-        image-only pages are recorded into the caller-supplied `failed_pages`
+        image-only pages are recorded into the caller-supplied 'failed_pages'
         list (mutated in place) so callers retain the exact same failure
         reporting behavior without the generator needing to return a tuple.
 
@@ -197,28 +249,22 @@ class PDFIngestor:
             raise ValueError(f"Cannot open PDF file: {e}")
 
         pages_extracted = 0
-
         try:
             for page_num in range(len(doc)):
                 try:
                     page = doc[page_num]
                     text = page.get_text()
-
                     # Check if page is image-only (very short text)
                     if len(text.strip()) < MIN_TEXT_LENGTH:
                         logger.warning(f"Page {page_num + 1} appears to be image-only (OCR not supported)")
                         failed_pages.append(page_num + 1)
                         continue
-
                     pages_extracted += 1
                     yield (page_num + 1, text)
-
                 except Exception as e:
                     logger.error(f"Failed to extract page {page_num + 1}: {e}")
                     failed_pages.append(page_num + 1)
-
             logger.info(f"Extracted {pages_extracted} pages, {len(failed_pages)} failed")
-
         finally:
             doc.close()
 
@@ -247,7 +293,7 @@ class PDFIngestor:
             self.chunker = TextChunker()
 
         ingested_at = datetime.now().isoformat()
-        BATCH_SIZE = 32
+        BATCH_SIZE = 8
         total_stored = 0
         chunk_index = 0
         pages_processed = 0
@@ -257,28 +303,21 @@ class PDFIngestor:
         # page is retained once we move on to the next one.
         for page_num, text in self.extract_pdf_text(pdf_path, failed_pages):
             pages_processed += 1
-
             # Convert to Markdown
             markdown_text = self.markdown_converter.convert(text)
-
             # Chunk this page's text
             chunks = self.chunker.chunk(markdown_text)
-
             # Embed and store this page's chunks in batches immediately
             for start in range(0, len(chunks), BATCH_SIZE):
                 batch_chunks = chunks[start:start + BATCH_SIZE]
-
                 batch_embeddings = retry_with_backoff(
                     lambda: self.embedder.encode(batch_chunks, batch_size=8),
                     max_retries=3,
                     initial_delay=1.0
                 )
-
                 embeddings_list = batch_embeddings.tolist()
-
                 batch_metadatas = []
                 batch_ids = []
-
                 for _ in batch_chunks:
                     batch_metadatas.append({
                         "doc_id": doc_id,
@@ -288,19 +327,15 @@ class PDFIngestor:
                         "ingested_at": ingested_at,
                         "embedding_model": self.embedder.active_model_name
                     })
-
                     batch_ids.append(f"{doc_id}___{chunk_index}")
                     chunk_index += 1
-
                 self.chroma_client.add_chunks(
                     ids=batch_ids,
                     documents=batch_chunks,
                     embeddings=embeddings_list,
                     metadatas=batch_metadatas
                 )
-
                 total_stored += len(batch_ids)
-
                 del batch_embeddings
                 del embeddings_list
                 batch_metadatas.clear()
@@ -309,7 +344,6 @@ class PDFIngestor:
                 del batch_metadatas
                 del batch_chunks
                 gc.collect()
-
             # Free this page's memory before moving to the next page
             chunks.clear()
             del chunks
@@ -321,16 +355,13 @@ class PDFIngestor:
             raise ValueError("No text could be extracted from PDF. It may be image-only (OCR not supported).")
 
         logger.info(f"Generated {total_stored} chunks")
-
         status = "partial" if failed_pages else "ingested"
-
         result = {
             "doc_id": doc_id,
             "status": status,
             "chunks": total_stored,
             "failed_pages": failed_pages
         }
-
         logger.info(f"Ingestion complete: {result}")
         return result
 
@@ -342,8 +373,6 @@ _ingestor_instance: Optional[PDFIngestor] = None
 def get_ingestor() -> PDFIngestor:
     """Get or create the singleton ingestor instance."""
     global _ingestor_instance
-
     if _ingestor_instance is None:
         _ingestor_instance = PDFIngestor()
-
     return _ingestor_instance
