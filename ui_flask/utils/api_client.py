@@ -40,7 +40,7 @@ class BackendAPIClient:
     
     def __init__(self, base_url: str = None):
         """Initialize client with backend URL."""
-        self.base_url = base_url or os.getenv("BACKEND_URL", "http://localhost:8000")
+        self.base_url = base_url or os.getenv("BACKEND_URL", "https://ai-rag-chatbot-backend-pnnq.onrender.com")
     
     def health_check(self) -> Dict[str, Any]:
         """Check backend health."""
