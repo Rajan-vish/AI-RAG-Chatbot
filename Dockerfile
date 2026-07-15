@@ -11,7 +11,6 @@ RUN pip install --upgrade pip
 RUN pip install -r requirements.txt
 
 # Download tokenizer during build
-RUN python -c "from transformers import AutoTokenizer; AutoTokenizer.from_pretrained('bert-base-uncased')"
 
 COPY . .
 
