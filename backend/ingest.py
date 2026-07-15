@@ -79,7 +79,7 @@ class MarkdownConverter:
 class TextChunker:
     """Token-based text chunker with fixed window and overlap."""
     
-    def __init__(self, tokenizer_name: str = "bert-base-uncased", chunk_size: int = 400, overlap: int = 50):
+    def __init__(self, tokenizer_name: str = "bert-base-uncased", chunk_size: int = 200, overlap: int = 20):
         """
         Initialize chunker with tokenizer.
         
@@ -169,7 +169,7 @@ class PDFIngestor:
         self.embedder = get_embedder()
         self.chroma_client = get_chroma_client()
         self.markdown_converter = MarkdownConverter()
-        self.chunker = TextChunker()
+        self.chunker = None
     
     def extract_pdf_text(self, pdf_path: str) -> Tuple[List[Tuple[int, str]], List[int]]:
         """
@@ -242,7 +242,10 @@ class PDFIngestor:
         for page_num, text in page_texts:
             # Convert to Markdown
             markdown_text = self.markdown_converter.convert(text)
-            
+            if self.chunker is None:
+    self.chunker = TextChunker()
+
+chunks = self.chunker.chunk(markdown_text)
             # Chunk text
             chunks = self.chunker.chunk(markdown_text)
             
@@ -260,36 +263,63 @@ class PDFIngestor:
         chunk_texts = [c["text"] for c in all_chunks]
         
         def embed_func():
-            return self.embedder.encode(chunk_texts, batch_size=32)
+            return self.embedder.encode(chunk_texts, batch_size=8)
         
-        embeddings = retry_with_backoff(embed_func, max_retries=3, initial_delay=1.0)
+        # embeddings = retry_with_backoff(embed_func, max_retries=3, initial_delay=1.0)
+BATCH_SIZE = 32
+
+for start in range(0, len(chunk_texts), BATCH_SIZE):
+
+    batch_chunks = chunk_texts[start:start + BATCH_SIZE]
+    batch_meta = all_chunks[start:start + BATCH_SIZE]
+
+    batch_embeddings = retry_with_backoff(
+        lambda: self.embedder.encode(batch_chunks, batch_size=8),
+        max_retries=3,
+        initial_delay=1.0
+    )
+
+    batch_ids = [
+        f"{doc_id}__{c['chunk_index']}"
+        for c in batch_meta
+    ]
+
+    batch_metadatas = [
+        {
+            "doc_id": doc_id,
+            "filename": filename,
+            "page": c["page"],
+            "chunk_index": c["chunk_index"],
+            "model": self.embedder.active_model_name,
+            "ingested_at": ingested_at
+        }
+        for c in batch_meta
+    ]
+
+    self.chroma_client.add_chunks(
+        ids=batch_ids,
+        documents=batch_chunks,
+        embeddings=batch_embeddings.tolist(),
+        metadatas=batch_metadatas
+    )
         
         # Prepare data for Chroma
         ingested_at = datetime.now().isoformat()
         ids = [f"{doc_id}___{c['chunk_index']}" for c in all_chunks]
-        documents = chunk_texts
-        embeddings_list = embeddings.tolist()
-        model_name = self.embedder.active_model_name
-
-        metadatas = [
-            {
-                "doc_id": doc_id,
-                "source_filename": filename,
-                "page_number": c["page_number"],
-                "chunk_index": c["chunk_index"],
-                "ingested_at": ingested_at,
-                "embedding_model": model_name
-            }
-            for c in all_chunks
-        ]
         
         # Store in Chroma
-        self.chroma_client.add_chunks(
-            ids=ids,
-            documents=documents,
-            embeddings=embeddings_list,
-            metadatas=metadatas
-        )
+        
+        import gc
+
+del embeddings
+del embeddings_list
+del chunk_texts
+del all_chunks
+del documents
+del metadatas
+del ids
+
+gc.collect()
         
         status = "partial" if failed_pages else "ingested"
         
