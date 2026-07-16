@@ -147,7 +147,7 @@ async def lifespan(app: FastAPI):
 
 # Initialize FastAPI app
 app = FastAPI(
-    title="Local RAG Chatbot API",
+    title=" AI RAG Chatbot API",
     description="PDF ingestion and query API with local embeddings and Gemini LLM",
     version="1.0.0",
     lifespan=lifespan
@@ -158,7 +158,7 @@ app = FastAPI(
 async def root():
     """Root endpoint with API info."""
     return {
-        "name": "Local RAG Chatbot API",
+        "name": "AI RAG Chatbot API",
         "version": "1.0.0",
         "endpoints": {
             "POST /documents": "Upload and ingest PDF",

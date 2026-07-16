@@ -1,5 +1,5 @@
 """
-Flask Web UI for Local RAG Chatbot
+Flask Web UI for AI RAG Chatbot
 Provides web interface for document upload, chat, and voice chat features.
 """
 

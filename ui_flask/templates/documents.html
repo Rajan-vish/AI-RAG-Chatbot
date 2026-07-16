@@ -1,4 +1,4 @@
-{% extends "base.html" %} {% block title %}Documents Library - Local RAG
+{% extends "base.html" %} {% block title %}Documents Library - AI RAG
 Chatbot{% endblock %} {% block content %}
 <div class="row">
   <div class="col-lg-10 mx-auto">
@@ -161,7 +161,7 @@ Chatbot{% endblock %} {% block content %}
   async function deleteDocument(docId, filename) {
     if (
       !confirm(
-        `Are you sure you want to delete "${filename}"?\n\nThis will remove all chunks and embeddings from the database.`
+        `Are you sure you want to delete "${filename}"?\n\nThis will remove the document, its chunks, and Gemini embeddings from ChromaDB.`
       )
     ) {
       return;

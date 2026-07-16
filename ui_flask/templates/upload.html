@@ -75,7 +75,7 @@ Chatbot{% endblock %} {% block content %}
           <div class="card-body">
             <ol class="mb-0">
               <li>Select one or more PDF documents to upload</li>
-              <li>Wait for the system to process and embed the documents</li>
+              <li>Wait for the system to process documents using Gemini Embeddings.</li>
               <li>
                 Once processing is complete, you can chat with the AI about the
                 content
@@ -91,7 +91,7 @@ Chatbot{% endblock %} {% block content %}
         <!-- Processing Info -->
         <div class="alert alert-info mt-4">
           <i class="fas fa-lightbulb"></i> <strong>Note:</strong>
-          Documents are processed locally with nomic-embed-text-v1 embeddings.
+          Documents are processed using Gemini Embeddings and stored in ChromaDB.
           Processing time depends on document size (typically 1 page per
           second).
         </div>

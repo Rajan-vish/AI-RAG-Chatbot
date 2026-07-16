@@ -1,14 +1,13 @@
-{% extends "base.html" %} {% block title %}Home - Local RAG Chatbot{% endblock
+{% extends "base.html" %} {% block title %}Home - AI RAG Chatbot{% endblock 
 %} {% block content %}
 <div class="row justify-content-center">
   <div class="col-lg-10">
     <div class="text-center mb-5">
       <h1 class="display-4 mb-3">
-        Local RAG Chatbot
+        AI RAG Chatbot
       </h1>
       <p class="lead text-muted">
-        Privacy-first AI assistant with local document embeddings and voice
-        capabilities
+       AI-powered document assistant built with Gemini 2.5 Flash, Gemini Embeddings, ChromaDB, and FastAPI.
       </p>
     </div>
 
@@ -37,7 +36,7 @@
             <h5 class="card-title">Voice Chat</h5>
             <p class="card-text">
               Speak your questions and hear AI responses with natural voice
-              interaction.
+              interaction
             </p>
             <a href="/voice" class="btn btn-success">Try Voice Chat</a>
           </div>
@@ -51,7 +50,7 @@
             <i class="fas fa-upload fa-3x text-warning mb-3"></i>
             <h5 class="card-title">Upload Documents</h5>
             <p class="card-text">
-              Add PDF documents to your knowledge base for AI analysis.
+             Upload PDF documents to build an intelligent AI knowledge base
             </p>
             <a href="/upload" class="btn btn-warning">Upload PDFs</a>
           </div>
@@ -65,7 +64,7 @@
             <i class="fas fa-folder-open fa-3x text-info mb-3"></i>
             <h5 class="card-title">Document Library</h5>
             <p class="card-text">
-              Browse and manage your uploaded documents and metadata.
+              View, organize, and manage your uploaded document collection.
             </p>
             <a href="/documents" class="btn btn-info">View Library</a>
           </div>
@@ -84,17 +83,15 @@
             <ul class="list-unstyled">
               <li class="mb-2">
                 <i class="fas fa-check-circle text-success"></i>
-                <strong>Local Embeddings:</strong> All document processing stays
-                on your machine
+                <strong>Gemini Embeddings:</strong> Cloud-powered semantic embeddings using Gemini
               </li>
               <li class="mb-2">
                 <i class="fas fa-check-circle text-success"></i>
-                <strong>Vector Search:</strong> Fast semantic search with
-                ChromaDB
+                <strong>Vector Search:</strong>  Lightning-fast semantic retrieval powered by ChromaDB.
               </li>
               <li class="mb-2">
                 <i class="fas fa-check-circle text-success"></i>
-                <strong>AI-Powered:</strong> Google Gemini for accurate answers
+                <strong>Gemini AI:</strong> Gemini 2.5 Flash for accurate document understanding
               </li>
             </ul>
           </div>
@@ -112,8 +109,7 @@
               </li>
               <li class="mb-2">
                 <i class="fas fa-check-circle text-success"></i>
-                <strong>Privacy First:</strong> Your data never leaves your
-                control
+                <strong>Secure Processing:</strong> Documents are processed securely using Gemini APIs.
               </li>
             </ul>
           </div>
@@ -133,16 +129,14 @@
             your PDF files
           </li>
           <li class="mb-2">
-            <strong>Wait for Processing:</strong> Documents are converted to
-            embeddings (takes a few seconds)
+            <strong>Wait for Processing:</strong> Your PDFs are indexed using Gemini Embeddings.
           </li>
           <li class="mb-2">
             <strong>Start Asking:</strong> Use text or voice chat to ask
             questions about your documents
           </li>
           <li class="mb-2">
-            <strong>Get Answers:</strong> Receive accurate responses with source
-            citations
+            <strong>Get Answers:</strong> Receive grounded AI responses with document citations.
           </li>
         </ol>
       </div>
